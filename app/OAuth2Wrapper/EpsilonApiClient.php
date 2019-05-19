@@ -8,38 +8,86 @@
 
 namespace App\OAuth2Wrapper;
 use GuzzleHttp\Client;
+use Illuminate\Support\Facades\Cache;
+use JsonSerializable;
 
-class EpsilonApiClient
+class EpsilonApiClient implements JsonSerializable
 {
     const EAPI_BASE_URL = "http://democloudlx.epsilontel.com/api/";
     const EAPI_ACCESS_TOKEN_URL = self::EAPI_BASE_URL.'oauth2/access-token';
     const EAPI_REFRESH_TOKEN_URL = self::EAPI_BASE_URL.'oauth2/refresh-token';
 
     const EAPI_ACCEPT_HEADER = "application/vnd.cloudlx.v1+json";
-    protected $http_client;
-    protected $secret;
+    const KEY_LIFE_LENGTH_REFRESH = 604800;
+    const KEY_LIFE_LENGTH_ACCESS = 3600;
+    const TOKENS_CACHE_KEY = 'EpsilonApiTokens';
 
+    /**
+     * @var Client
+     */
+    protected $http_client;
+
+    /**
+     * @var string
+     */
+    protected $client_secret;
+
+    /**
+     * @var string
+     */
     protected $client_id;
 
+    /**
+     * @var string
+     */
+    protected $grant_type;
+
+    /**
+     * @var string
+     */
     protected $refresh_token;
 
+    /**
+     * @var string
+     */
     protected $access_token;
 
+    /**
+     * @var DateTime
+     */
     protected $access_expires_in;
 
+    /**
+     * @var DateTime
+     */
     protected $refresh_expires_in;
 
+    /**
+     * @var secret
+     */
     protected $token_type;
 
-    public function __construct(){
-        $init_data = config('auth.epsilon.OAuth');
-        $this->secret = $init_data["secret"];
-        $this->client_id = $init_data["client_id"];
-        $this->grant_type = $init_data["grant_type"];
+    /**
+     * * CreateApiClient Instance
+     *
+     * EpsilonApiClient constructor.
+     * @param array $data
+     */
+    public function __construct( array $data = array()){
+
+        if(Cache::has( self::TOKENS_CACHE_KEY ) ){
+            $init_data = json_decode(Cache::get(  self::TOKENS_CACHE_KEY ), JSON_OBJECT_AS_ARRAY) ;
+        }else{
+            $init_data = config('auth.epsilon.OAuth');
+        }
+
+        foreach($this as $key=> $value){
+            if($key == "http_client") continue;
+            @$this->$key = $data[$key]?:$init_data[$key];
+        }
+
         $this->initHttpClient();
-//        $this->getAccessToken();
         $this->refreshTokens();
-//        dd($this->request("GET" ,"services"));
     }
 
     private function initHttpClient(){
@@ -49,24 +97,33 @@ class EpsilonApiClient
         ]);
     }
 
-
+    /**
+     * Refresh tokens
+     */
     public function refreshTokens(){
-        if(isset($this->refresh_expires_in) and $this->refresh_expires_in > now()){
+        if($this->isExpiredAccess() and !$this->isExpiredRefresh()){
             $this->requestTokens( self::EAPI_REFRESH_TOKEN_URL, [
                 "grant_type" => $this->grant_type,
                 "client_id" => $this->client_id,
-                "client_secret" => $this->secret,
+                "client_secret" => $this->client_secret,
                 "refresh_token" => $this->refresh_token
             ]);
-        }elseif(!isset($this->refresh_expires_in) || now() > $this->refresh_expires_in ) {
+        }else{
             $this->requestTokens( self::EAPI_ACCESS_TOKEN_URL, [
                 "grant_type" => $this->grant_type,
                 "client_id" => $this->client_id,
-                "client_secret" => $this->secret,
+                "client_secret" => $this->client_secret,
             ] );
         }
+
+        Cache::add( self::TOKENS_CACHE_KEY , json_encode($this) , self::KEY_LIFE_LENGTH_REFRESH );
     }
 
+    /**
+     * Make request to api for token
+     * @param $uri
+     * @param array $params
+     */
     public function requestTokens($uri, array $params){
         $responce = $this->http_client->request("POST", $uri, [
             "headers" =>[
@@ -83,18 +140,44 @@ class EpsilonApiClient
         $this->refresh_token = $body->refresh_token;
     }
 
-    public function expired(){
-        if(isset($this->expires_in )){
+    /**
+     * check is refresh token expired
+     * @return bool
+     */
+    public function isExpiredRefresh(){
+        if(!isset($this->refresh_expires_in)){
             return true;
         }
-
-        if($this->expires_in > now()){
+        if($this->refresh_expires_in > now()){
             return false;
         }else{
             return true;
         }
     }
 
+    /**
+     * check is access token expired
+     * @return bool
+     */
+    public function isExpiredAccess(){
+        if(!isset($this->access_expires_in )){
+            return true;
+        }
+        if($this->access_expires_in > now()){
+            return false;
+        }else{
+            return true;
+        }
+    }
+
+    /**
+     * Make authenticated request to epsilon api
+     *
+     * @param $method
+     * @param $endpoint
+     * @param array $params
+     * @return mixed
+     */
     public function request($method, $endpoint,array $params = array()){
         $responce = $this->http_client->request($method, self::EAPI_BASE_URL.$endpoint, [
             "headers" =>[
@@ -106,4 +189,25 @@ class EpsilonApiClient
 
         return json_decode($responce->getBody());
     }
+
+    /**
+     * @inheritDoc
+     */
+    function jsonSerialize()
+    {
+       return [
+           "EpsilonApiClient" => [
+                    "client_secret" => $this->client_secret,
+                    "client_id" => $this->client_id,
+                    "grant_type" => $this->grant_type,
+                    "refresh_token" => $this->refresh_token,
+                    "access_token" => $this->access_token,
+                    "access_expires_in" => $this->access_expires_in,
+                    "refresh_expires_in" => $this->refresh_expires_in,
+                    "token_type" => $this->token_type
+           ]
+       ];
+    }
+
+
 }
