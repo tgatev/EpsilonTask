@@ -102,8 +102,8 @@ return [
 
     'epsilon' => [
         "OAuth" => [
-            "client_id" => "",
-            "secret" => "",
+            "client_id" => "pYM2MU0vClB7nseMvnxF3sNqSQa4dnxJl9hHt3Qf",
+            "secret" => "F4gdM8apm0xJxalJEgHFNrvGLQm74P4w1MxCUkQb",
             "grant_type" => "client_credentials"
         ]
     ]
