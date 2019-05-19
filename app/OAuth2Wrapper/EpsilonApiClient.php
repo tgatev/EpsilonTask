@@ -39,7 +39,7 @@ class EpsilonApiClient
         $this->initHttpClient();
 //        $this->getAccessToken();
         $this->refreshTokens();
-        dd($this->request("GET" ,"services"));
+//        dd($this->request("GET" ,"services"));
     }
 
     private function initHttpClient(){
