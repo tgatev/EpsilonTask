@@ -11,8 +11,8 @@
 |
 */
 
-Route::get('/', function () {
-    return view('welcome');
-});
-Route::get('/home', "DashboardController@index")->name("Home");
+Route::get('/', "DashboardController@index")->name("Home");
 
+Route::get('/services_datatable','DashboardController@displayServices')->name('ServicesDatatable');
+Route::post('/services_datatable_data','DashboardController@getServicesData')->name('ServicesDatatable.data');
+Route::get("/service_details/{id}/", 'DashboardController@displayServiceDetails')->name("ServiceDetails");
