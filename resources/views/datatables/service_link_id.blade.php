@@ -1,0 +1,1 @@
+<a href="{{ route('ServiceDetails' ,['id' => $id]) }}">{{$id}}</a>
