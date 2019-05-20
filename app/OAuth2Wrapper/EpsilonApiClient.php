@@ -7,6 +7,7 @@
  */
 
 namespace App\OAuth2Wrapper;
+use Faker\Provider\DateTime;
 use GuzzleHttp\Client;
 use Illuminate\Support\Facades\Cache;
 use JsonSerializable;
@@ -43,6 +44,10 @@ class EpsilonApiClient implements JsonSerializable
     protected $grant_type;
 
     /**
+     * @var int
+     */
+    protected $expires_in;
+    /**
      * @var string
      */
     protected $refresh_token;
@@ -53,12 +58,12 @@ class EpsilonApiClient implements JsonSerializable
     protected $access_token;
 
     /**
-     * @var DateTime
+     * @var string
      */
     protected $access_expires_in;
 
     /**
-     * @var DateTime
+     * @var string
      */
     protected $refresh_expires_in;
 
@@ -74,7 +79,7 @@ class EpsilonApiClient implements JsonSerializable
      * @param array $data
      */
     public function __construct( array $data = array()){
-
+        $init_data = array();
         if(Cache::has( self::TOKENS_CACHE_KEY ) ){
             $init_data = json_decode(Cache::get(  self::TOKENS_CACHE_KEY ), JSON_OBJECT_AS_ARRAY) ;
         }else{
@@ -83,10 +88,14 @@ class EpsilonApiClient implements JsonSerializable
 
         foreach($this as $key=> $value){
             if($key == "http_client") continue;
-            @$this->$key = $data[$key]?:$init_data[$key];
+            if(isset($data[$key])) {
+                $this->$key = $data[$key];
+            }else{
+                $this->$key = isset($init_data[$key])? $init_data[$key] : null;
+            }
         }
-
         $this->initHttpClient();
+
         $this->refreshTokens();
     }
 
@@ -108,15 +117,16 @@ class EpsilonApiClient implements JsonSerializable
                 "client_secret" => $this->client_secret,
                 "refresh_token" => $this->refresh_token
             ]);
-        }else{
-            $this->requestTokens( self::EAPI_ACCESS_TOKEN_URL, [
+        }elseif(!isset($this->access_token) and cache::has(self::TOKENS_CACHE_KEY)){
+            $data = json_decode(Cache::get(self::TOKENS_CACHE_KEY));
+            $this->setTokens( $data);
+        }elseif($this->isExpiredRefresh()) {
+            $this->requestTokens(self::EAPI_ACCESS_TOKEN_URL, [
                 "grant_type" => $this->grant_type,
                 "client_id" => $this->client_id,
                 "client_secret" => $this->client_secret,
-            ] );
+            ]);
         }
-
-        Cache::add( self::TOKENS_CACHE_KEY , json_encode($this) , self::KEY_LIFE_LENGTH_REFRESH );
     }
 
     /**
@@ -133,13 +143,25 @@ class EpsilonApiClient implements JsonSerializable
         ] );
 
         $body = json_decode($responce->getBody());
-        $this->access_token = $body->access_token;
-        $this->token_type = $body->token_type;
-        $this->access_expires_in = now()->add(new \DateInterval( sprintf("P0Y0DT0H0M%dS",$body->expires_in) )) ;
-        $this->refresh_expires_in = now()->add(new \DateInterval("P0Y7D") ) ;
-        $this->refresh_token = $body->refresh_token;
+        $this->setTokens($body);
     }
 
+    /**
+     * Set tokens from cache or request
+     * @param $data
+     */
+    private function setTokens($data){
+        //cast to std object
+        $data = (object)(array)$data;
+        $this->access_token = $data->access_token;
+        $this->token_type = $data->token_type;
+        $this->expires_in = $data->expires_in?: self::KEY_LIFE_LENGTH_ACCESS;
+        $this->access_expires_in = now()->add(new \DateInterval( sprintf("P0Y0DT0H0M%dS",$this->expires_in) ))->format("Y-m-d H:i:s") ;
+        $this->refresh_expires_in = now()->add(new \DateInterval("P0Y7D"))->format("Y-m-d H:i:s") ;
+        $this->refresh_token = $data->refresh_token;
+
+        Cache::put( self::TOKENS_CACHE_KEY , json_encode($this) , self::KEY_LIFE_LENGTH_REFRESH );
+    }
     /**
      * check is refresh token expired
      * @return bool
@@ -148,7 +170,10 @@ class EpsilonApiClient implements JsonSerializable
         if(!isset($this->refresh_expires_in)){
             return true;
         }
-        if($this->refresh_expires_in > now()){
+        $RefreshExpireDateTime = new \DateTime($this->getRefreshExpiresIn());
+        $CurrentDateTime = now();
+
+        if( $RefreshExpireDateTime > $CurrentDateTime){
             return false;
         }else{
             return true;
@@ -163,7 +188,10 @@ class EpsilonApiClient implements JsonSerializable
         if(!isset($this->access_expires_in )){
             return true;
         }
-        if($this->access_expires_in > now()){
+        $AccessExpireDateTime = new \DateTime($this->getAccessExpiresIn());
+        $CurrentDateTime = now();
+
+        if($AccessExpireDateTime > $CurrentDateTime){
             return false;
         }else{
             return true;
@@ -179,6 +207,8 @@ class EpsilonApiClient implements JsonSerializable
      * @return mixed
      */
     public function request($method, $endpoint,array $params = array()){
+        // Refresh token when expired
+        if($this->isExpiredAccess()) $this->refreshTokens();
         $responce = $this->http_client->request($method, self::EAPI_BASE_URL.$endpoint, [
             "headers" =>[
                 "Accept" => self::EAPI_ACCEPT_HEADER,
@@ -196,17 +226,88 @@ class EpsilonApiClient implements JsonSerializable
     function jsonSerialize()
     {
        return [
-           "EpsilonApiClient" => [
-                    "client_secret" => $this->client_secret,
-                    "client_id" => $this->client_id,
-                    "grant_type" => $this->grant_type,
-                    "refresh_token" => $this->refresh_token,
-                    "access_token" => $this->access_token,
-                    "access_expires_in" => $this->access_expires_in,
-                    "refresh_expires_in" => $this->refresh_expires_in,
-                    "token_type" => $this->token_type
-           ]
+            "client_secret" => $this->client_secret,
+            "client_id" => $this->client_id,
+            "expires_in" => $this->expires_in,
+            "grant_type" => $this->grant_type,
+            "refresh_token" => $this->refresh_token,
+            "access_token" => $this->access_token,
+            "access_expires_in" => $this->access_expires_in,
+            "refresh_expires_in" => $this->refresh_expires_in,
+            "token_type" => $this->token_type
        ];
+    }
+
+    /**
+     * @return string
+     */
+    public function getClientSecret()
+    {
+        return $this->client_secret;
+    }
+
+    /**
+     * @return string
+     */
+    public function getClientId()
+    {
+        return $this->client_id;
+    }
+
+    /**
+     * @return string
+     */
+    public function getGrantType()
+    {
+        return $this->grant_type;
+    }
+
+    /**
+     * @return int
+     */
+    public function getExpiresIn()
+    {
+        return $this->expires_in;
+    }
+
+    /**
+     * @return string
+     */
+    public function getRefreshToken()
+    {
+        return $this->refresh_token;
+    }
+
+    /**
+     * @return string
+     */
+    public function getAccessToken()
+    {
+        return $this->access_token;
+    }
+
+    /**
+     * @return string
+     */
+    public function getAccessExpiresIn()
+    {
+        return $this->access_expires_in;
+    }
+
+    /**
+     * @return string
+     */
+    public function getRefreshExpiresIn()
+    {
+        return $this->refresh_expires_in;
+    }
+
+    /**
+     * @return secret
+     */
+    public function getTokenType()
+    {
+        return $this->token_type;
     }
 
 
